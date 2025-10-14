@@ -93,85 +93,116 @@ end
 
 % section 2.5
 % tasks: noise reduction, edge detection, feature extraction, color correlation, compression
-tasks = {'Noise Reduction', 'Edge Detection', 'Feature Extraction', 'Color Correlation', 'Compression'};
+% Tasks: Noise Reduction, Edge Detection, Feature Extraction, Color Correction, Compression
+tasks = {'Noise Reduction', 'Edge Detection', 'Feature Extraction', 'Color Correction', 'Compression'};
 
-% random capabilities, higher value = better capability
-capabilities = rand(5,5);
+% Random capabilities (bids): Higher value = better capability
+capabilities = rand(5,5);  % Rows: agents, Columns: tasks
 
-% choosing agent 3 as coordinator
+% Coordinator: Agent 3 (C)
 coordinator = 3;
 
-% simulate bidding, limiting it to neighbours
-allocation = zeros(1,5);
+% Simulate bidding: Only neighbors can bid
+allocation = zeros(1,5);  % Task to agent
 for t = 1:5
-    % announce to neighbours
-    neighbours = find(Adj(coordinator, :));
-    bidders = [coordinator, neighbours];
+    % Announce to neighbors
+    neighbors = find(Adj(coordinator,:));
+    bidders = [coordinator, neighbors];  % Include self if capable
     bids = capabilities(bidders, t);
     [~, winnerIdx] = max(bids);
-    allocations(t) = bidders(winnerIdx);
+    allocation(t) = bidders(winnerIdx);
 end
 
-% display allocation
-for t=1:5
-    agentLabel=char('A' + allocations(t)-1);
+% Display allocation
+for t = 1:5
+    agentLabel = char('A' + allocation(t) - 1);
     disp([tasks{t} ' allocated to Agent ' agentLabel]);
 end
 
-% the secure agent class definition
+%% SecureAgent Class Definition
 classdef SecureAgent < handle
     properties
         agentID
         privateKey
-        sharePublicKey
+        publicKey
         peerPublicKeys
     end
-
+    
     methods
         function obj = SecureAgent(agentID)
             obj.agentID = agentID;
             obj.peerPublicKeys = containers.Map();
-            % geneerating RSA key pair
+            % Generate RSA key pair
             kpg = java.security.KeyPairGenerator.getInstance('RSA');
             kpg.initialize(2048);
             keys = kpg.generateKeyPair();
-            obj.publicKey=keys.getPublic();
-            obj.privateKey=keys.getPrivate();
+            obj.publicKey = keys.getPublic();
+            obj.privateKey = keys.getPrivate();
         end
-
-        function sharePublicKey = sendSecureImage(obj, peer)
-            obj.peerPublicKeys(peer.agentID)=peer.publicKey;
-            peer.peerPublicKeys(obj.agentID)=obj.publicKey;
+        
+        function sharePublicKey(obj, peer)
+            obj.peerPublicKeys(peer.agentID) = peer.publicKey;
+            peer.peerPublicKeys(obj.agentID) = obj.publicKey;
         end
-
+        
         function packet = sendSecureImage(obj, image, receiverID)
-            % hashmapping the image
+            % Hash image
             md = java.security.MessageDigest.getInstance('SHA-256');
             md.update(uint8(image(:)));
             hash = typecast(md.digest(), 'uint8')';
-
-            % sign the hash
-            singer = java.security.Signature.getInstance('SHA256withRSA');
-            singer.initSign(obj.privateKey);
-            singer.update(hash);
-            signature = typecast(singer.sign(), 'uint8');
-
-            % package data
-            data = struct('Image', image, 'sig', signature, 'sender', obj.agentID);
+            
+            % Sign hash
+            signer = java.security.Signature.getInstance('SHA256withRSA');
+            signer.initSign(obj.privateKey);
+            signer.update(hash);
+            signature = typecast(signer.sign(), 'uint8')';
+            
+            % Package data
+            data = struct('image', image, 'sig', signature, 'sender', obj.agentID);
             bytes = getByteStreamFromArray(data);
-
-            % encrypt with receiver's public key
+            
+            % Encrypt with receiver's public key
             cipher = javax.crypto.Cipher.getInstance('RSA/ECB/PKCS1Padding');
             cipher.init(1, obj.peerPublicKeys(receiverID));
-            packet = typecast(cipher.doFinal(bytes), 'uint8');
+            packet = typecast(cipher.doFinal(bytes), 'uint8')';
         end
-
-        function[image, valid] = receiveSecureImg(obj, packet, senderID)
-            % decrypting with a new private key
+        
+        function [image, valid] = receiveSecureImage(obj, packet, senderID)
+            % Decrypt with private key
             cipher = javax.crypto.Cipher.getInstance('RSA/ECB/PKCS1Padding');
             cipher.init(2, obj.privateKey);
             bytes = cipher.doFinal(packet);
             data = getArrayFromByteStream(bytes);
-
-            % verify the signature
-            md = java.security.MessageDigest.getInstance
+            
+            % Verify signature
+            md = java.security.MessageDigest.getInstance('SHA-256');
+            md.update(uint8(data.image(:)));
+            hash = typecast(md.digest(), 'uint8')';
+            
+            verifier = java.security.Signature.getInstance('SHA256withRSA');
+            verifier.initVerify(obj.peerPublicKeys(senderID));
+            verifier.update(hash);
+            valid = verifier.verify(data.sig);
+            
+            image = data.image;
+        end
+        
+        function success = authenticate(obj, peer)
+            % Challenge-response authentication
+            nonce = randi([1e9, 1e10]);
+            challenge = typecast(int32(nonce), 'uint8');
+            
+            % Peer signs nonce
+            signer = java.security.Signature.getInstance('SHA256withRSA');
+            signer.initSign(peer.privateKey);
+            signer.update(challenge);
+            response = signer.sign();
+            
+            % Verify signature
+            verifier = java.security.Signature.getInstance('SHA256withRSA');
+            verifier.initVerify(peer.publicKey);
+            verifier.update(challenge);
+            success = verifier.verify(response);
+        end
+    end
+end
