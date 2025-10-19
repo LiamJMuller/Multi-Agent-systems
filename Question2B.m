@@ -34,7 +34,7 @@ figure;
 for p = 1:3
     subplot(3,1,p);
     plot(0:maxIter, squeeze(states(:, :, p)));
-    title(['Concensus on ', params{p}]);
+    title(['Consensus on ', params{p}]);
     xlabel('Iteration'); ylabel('Value');
     legend('Agent A', 'B', 'C', 'D', 'E');
     grid on;
@@ -42,24 +42,23 @@ end
 
 % final consensus values
 final = squeeze(states(:, end, :));
-disp('Final Concensus Values:');
+disp('Final Consensus Values:');
 disp(['Brightness: ' num2str(mean(final(:,1)))]);
 disp(['Contrast: ' num2str(mean(final(:,2)))]);
 disp(['Sharpness: ' num2str(mean(final(:,3)))]);
 
 % 2.4 security protocol
-
 agentNames = {'A', 'B', 'C', 'D', 'E'};
 secureAgent = cell(1, N);
 for i = 1:N
-    secureAgent{i} = SecureAgent(agentName{i});
+    secureAgent{i} = SecureAgent(agentNames{i}); % Fixed to agentNames
 end
 
 % exchanging public keys
 for i = 1:N
     for j = i+1:N
         if Adj(i,j) ==1
-            secureAgents{i}.sharePublicKey(secureAgent{j});
+            secureAgent{i}.sharePublicKey(secureAgent{j});
         end
     end
 end
@@ -73,7 +72,8 @@ fprintf('Transmitting secure image from Agent %s to Agent %s\n', ...
         agentNames{senderIdx}, agentNames{receiverIdx});
 
 % decrypting and verifying
-[receivedImg, isValid] = secureAgent{receiverIdx}.receiveSecureImg(packet, agentNames{senderIdx});
+packet = secureAgent{senderIdx}.sendSecureImage(testImage, agentNames{receiverIdx});
+[receivedImg, isValid] = secureAgent{receiverIdx}.receiveSecureImage(packet, agentNames{senderIdx});
 
 if isValid && isequal(testImage, receivedImg)
     fprintf('Image is transmitted securely and verified successfully.\n');
@@ -82,18 +82,16 @@ else
 end
 
 % mutual auth
-fprintf('Performing mutal authrntication between Agent %s and Agent %s\n', ...
+fprintf('Performing mutual authentication between Agent %s and Agent %s\n', ...
         agentNames{senderIdx}, agentNames{receiverIdx});
 authSuccess = secureAgent{senderIdx}.authenticate(secureAgent{receiverIdx});
 if authSuccess
-    fprintf('Mutual authentication successful');
+    fprintf('Mutual authentication successful\n');
 else
-    fprintf('Authentication failed');
+    fprintf('Authentication failed\n');
 end
 
 % section 2.5
-% tasks: noise reduction, edge detection, feature extraction, color correlation, compression
-% Tasks: Noise Reduction, Edge Detection, Feature Extraction, Color Correction, Compression
 tasks = {'Noise Reduction', 'Edge Detection', 'Feature Extraction', 'Color Correction', 'Compression'};
 
 % Random capabilities (bids): Higher value = better capability
@@ -119,90 +117,26 @@ for t = 1:5
     disp([tasks{t} ' allocated to Agent ' agentLabel]);
 end
 
-%% SecureAgent Class Definition
-classdef SecureAgent < handle
-    properties
-        agentID
-        privateKey
-        publicKey
-        peerPublicKeys
-    end
-    
-    methods
-        function obj = SecureAgent(agentID)
-            obj.agentID = agentID;
-            obj.peerPublicKeys = containers.Map();
-            % Generate RSA key pair
-            kpg = java.security.KeyPairGenerator.getInstance('RSA');
-            kpg.initialize(2048);
-            keys = kpg.generateKeyPair();
-            obj.publicKey = keys.getPublic();
-            obj.privateKey = keys.getPrivate();
-        end
-        
-        function sharePublicKey(obj, peer)
-            obj.peerPublicKeys(peer.agentID) = peer.publicKey;
-            peer.peerPublicKeys(obj.agentID) = obj.publicKey;
-        end
-        
-        function packet = sendSecureImage(obj, image, receiverID)
-            % Hash image
-            md = java.security.MessageDigest.getInstance('SHA-256');
-            md.update(uint8(image(:)));
-            hash = typecast(md.digest(), 'uint8')';
-            
-            % Sign hash
-            signer = java.security.Signature.getInstance('SHA256withRSA');
-            signer.initSign(obj.privateKey);
-            signer.update(hash);
-            signature = typecast(signer.sign(), 'uint8')';
-            
-            % Package data
-            data = struct('image', image, 'sig', signature, 'sender', obj.agentID);
-            bytes = getByteStreamFromArray(data);
-            
-            % Encrypt with receiver's public key
-            cipher = javax.crypto.Cipher.getInstance('RSA/ECB/PKCS1Padding');
-            cipher.init(1, obj.peerPublicKeys(receiverID));
-            packet = typecast(cipher.doFinal(bytes), 'uint8')';
-        end
-        
-        function [image, valid] = receiveSecureImage(obj, packet, senderID)
-            % Decrypt with private key
-            cipher = javax.crypto.Cipher.getInstance('RSA/ECB/PKCS1Padding');
-            cipher.init(2, obj.privateKey);
-            bytes = cipher.doFinal(packet);
-            data = getArrayFromByteStream(bytes);
-            
-            % Verify signature
-            md = java.security.MessageDigest.getInstance('SHA-256');
-            md.update(uint8(data.image(:)));
-            hash = typecast(md.digest(), 'uint8')';
-            
-            verifier = java.security.Signature.getInstance('SHA256withRSA');
-            verifier.initVerify(obj.peerPublicKeys(senderID));
-            verifier.update(hash);
-            valid = verifier.verify(data.sig);
-            
-            image = data.image;
-        end
-        
-        function success = authenticate(obj, peer)
-            % Challenge-response authentication
-            nonce = randi([1e9, 1e10]);
-            challenge = typecast(int32(nonce), 'uint8');
-            
-            % Peer signs nonce
-            signer = java.security.Signature.getInstance('SHA256withRSA');
-            signer.initSign(peer.privateKey);
-            signer.update(challenge);
-            response = signer.sign();
-            
-            % Verify signature
-            verifier = java.security.Signature.getInstance('SHA256withRSA');
-            verifier.initVerify(peer.publicKey);
-            verifier.update(challenge);
-            success = verifier.verify(response);
-        end
-    end
+% temporary serialization functions
+function bytes = getByteStreamFromArray(data)
+    % convert struct to byte stream using a temporary file
+    tempFile = tempname;
+    save(tempFile, '-struct', 'data', '-v7.3'); % saving as MAT file
+    fid = fopen(tempFile, 'r');
+    bytes = fread(fid, inf, 'uint8');
+    fclose(fid);
+    delete(tempFile);
 end
+function data = getArrayFromByteStream(bytes)
+    % convert byte stream back to struct
+    tempFile = tempname;
+    fid = fopen(tempFile, 'w');
+    fwrite(fid, bytes, 'uint8');
+    fclose(fid);
+    data = load(tempFile, '-mat');
+    delete(tempFile);
+    data = data.data; % extract struct from loaded data
+end
+
+% adding SecureAgent.m for secure communication
+% addpath('SecureAgent.m');
